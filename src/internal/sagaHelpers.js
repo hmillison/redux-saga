@@ -1,6 +1,6 @@
 import { END } from './channel'
-import { makeIterator } from './utils'
-import { take, fork, cancel } from './io'
+import { makeIterator, delay } from './utils'
+import { take, fork, cancel, call, race } from './io'
 
 const done = {done: true, value: undefined}
 const qEnd = {}
@@ -21,7 +21,7 @@ function fsmIterator(fsm, q0, name = 'iterator') {
       let [q, output, _updateState] = fsm[qNext]()
       qNext = q
       updateState = _updateState
-      return qNext === qEnd ? done : output
+      return qNext === qEnd || output === END ? done : output
     }
   }
 
@@ -48,7 +48,7 @@ export function takeEvery(pattern, worker, ...args) {
 
   return fsmIterator({
     q1() { return ['q2', yTake, setAction] },
-    q2() { return action === END ? [qEnd] : ['q1', yFork(action)] }
+    q2() { return ['q1', yFork(action)] }
   }, 'q1', `takeEvery(${safeName(pattern)}, ${worker.name})`)
 }
 
@@ -63,13 +63,34 @@ export function takeLatest(pattern, worker, ...args) {
 
   return fsmIterator({
     q1() { return ['q2', yTake, setAction] },
-    q2() {
-      return action === END
-        ? [qEnd]
-        : task ? ['q3', yCancel(task)] : ['q1', yFork(action), setTask]
-    },
-    q3() {
-      return ['q1', yFork(action), setTask]
-    }
+    q2() { return task ? ['q3', yCancel(task)] : ['q3'] },
+    q3() { return ['q1', yFork(action), setTask] }
   }, 'q1', `takeLatest(${safeName(pattern)}, ${worker.name})`)
+}
+
+export function debounce(delayLength, pattern, worker, ...args) {
+  let action, raceOutput
+
+  const yTake = {done: false, value: take(pattern)}
+  const yRace = {
+    done: false,
+    value: race({
+      action: take(pattern),
+      debounce: call(delay, delayLength)
+    })
+  }
+  const yFork = ac => ({done: false, value: fork(worker, ...args, ac)})
+
+  const setAction = ac => action = ac
+  const setRaceOutput = ro => raceOutput = ro
+
+  return fsmIterator({
+    q1() { return ['q2', yTake, setAction] },
+    q2() { return ['q3', yRace, setRaceOutput] },
+    q3() { return raceOutput.debounced
+      ? ['q1', yFork(action)]
+      : ['q4', raceOutput.action, setAction]
+    },
+    q4() { return ['q2'] }
+  }, 'q1', `debounce(${safeName(pattern)}, ${worker.name})`)
 }
