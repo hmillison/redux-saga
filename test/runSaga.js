@@ -1,9 +1,8 @@
 import test from 'tape'
 
 import { runSaga } from '../src'
-import { fork, take, put, select } from '../src/effects'
+import { fork, take, put, select, race } from '../src/effects'
 import {emitter} from '../src/internal/channel'
-
 
 function storeLike(reducer, state) {
   const em = emitter()
@@ -17,8 +16,6 @@ function storeLike(reducer, state) {
     },
     getState: () => state
   }
-
-
 }
 
 test('runSaga', assert => {
@@ -52,8 +49,6 @@ test('runSaga', assert => {
     actual.push( yield select(typeSelector) )
   }
 
-
-
   const expected = [
     {type: 'ACTION-1'}, 'ACTION-1',
     {type: 'ACTION-2'}, 'ACTION-2',
@@ -67,5 +62,47 @@ test('runSaga', assert => {
   )
 
   task.done.catch(err => assert.fail(err))
-
 })
+
+test('runSaga - put causing sync dispatch response in store-like subscriber', assert => {
+  assert.plan(1)
+
+  const actual = []
+
+  const reducer = (state, action) => action.type
+  const store = storeLike(reducer, {})
+
+  store.subscribe(() => {
+    if (store.getState() === 'c')
+      store.dispatch({type: 'b', test: true})
+  })
+
+  runSaga(root(), store)
+  store.dispatch({type: 'a', test: true})
+
+  function* root() {
+    while (true) {
+      const { a, b } = yield race({
+        a: take('a'),
+        b: take('b')
+      })
+
+      actual.push(a ? a.type : b.type)
+
+      if (a) {
+        yield put({type: 'c', test: true})
+        continue
+      }
+
+      yield put({type: 'd', test: true})
+    }
+  }
+
+  Promise.resolve().then(() => {
+    assert.deepEqual(actual, ['a', 'b'],
+      "Sagas can't miss actions dispatched by store-like subscribers during put handling"
+    );
+    assert.end();
+  })
+})
+

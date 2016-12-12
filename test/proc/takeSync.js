@@ -7,7 +7,6 @@ import { take, put, fork, join, call, race, cancel } from '../../src/effects'
 import {channel} from '../../src/internal/channel'
 import {buffers} from '../../src/internal/buffers'
 
-
 test('synchronous sequential takes', assert => {
   assert.plan(1);
 
